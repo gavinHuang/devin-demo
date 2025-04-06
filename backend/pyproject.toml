@@ -17,6 +17,7 @@ trafilatura = "^2.0.0"
 newspaper3k = "^0.2.8"
 readability-lxml = "^0.8.1"
 uvicorn = "^0.34.0"
+openai = "^1.70.0"
 
 
 [build-system]

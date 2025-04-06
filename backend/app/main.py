@@ -121,106 +121,64 @@ async def url_to_text(request: UrlToTextRequest):
 @app.post("/api/condense-text", response_model=TextCondensationResponse)
 async def condense_text(request: TextCondensationRequest):
     """
-    Condense text while preserving structure and logical flow.
+    Condense text while preserving structure and logical flow using GPT-4o.
     Reduces text length to approximately the requested percentage.
     """
     try:
-        original_text = request.text
-        original_length = len(original_text)
-        target_length = int(original_length * (request.percentage / 100))
+        import os
+        from openai import OpenAI
 
-        paragraphs = re.split(r'\n\s*\n', original_text)
-
-        headings = []
-        content_paragraphs = []
-
-        for p in paragraphs:
-            p = p.strip()
-            if not p:
-                continue
-
-            lines = p.split('\n')
-            if len(lines) == 1 and len(lines[0]) < 100 and not re.search(r'[.!?]$', lines[0]):
-                if request.preserve_headings:
-                    headings.append((len(content_paragraphs), p))
-                content_paragraphs.append(p)
-            else:
-                content_paragraphs.append(p)
-
-        if len(content_paragraphs) == 0:
-            return TextCondensationResponse(
-                original_length=original_length,
-                condensed_length=0,
-                percentage_achieved=0,
-                condensed_text=""
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500, 
+                detail="OpenAI API key not found. Please set the OPENAI_API_KEY environment variable."
             )
 
-        condensed_paragraphs = []
-        current_length = 0
+        client = OpenAI(api_key=api_key)
+        
+        original_text = request.text
+        original_length = len(original_text)
+        
+        system_prompt = f"""You are an expert in text condensation and summarization. Given an article, your task is to produce a condensed version that maintains the structure and logical flow of the original text while reducing its length to approximately {request.percentage}% of the original.
 
-        for i, paragraph in enumerate(content_paragraphs):
-            is_heading = any(h[0] == i for h in headings)
+Instructions:
 
-            if is_heading and request.preserve_headings:
-                condensed_paragraphs.append(paragraph)
-                current_length += len(paragraph)
-            else:
-                paragraph_target = int(len(paragraph) * (request.percentage / 100))
+Preserve the key sections and logical structure of the article, ensuring the output follows the same progression of ideas.
 
-                sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+Retain essential details while removing redundancy, filler content, and less critical examples.
 
-                if len(sentences) <= 2:
-                    condensed_paragraphs.append(paragraph)
-                    current_length += len(paragraph)
-                else:
-                    important_sentences = [sentences[0]]
+Maintain readability and coherence, ensuring smooth transitions between sections.
 
-                    key_phrases = ["important", "key", "significant", "essential", "crucial", "critical", "main", "primary"]
-                    middle_sentences = sentences[1:-1]
+Do not rephrase excessively—prioritize direct condensation over rewriting.
 
-                    scored_sentences = []
-                    for idx, sentence in enumerate(middle_sentences):
-                        score = 0
-                        score += 100 - min(len(sentence), 100)
+Formatting:
 
-                        for phrase in key_phrases:
-                            if phrase.lower() in sentence.lower():
-                                score += 20
+{"If the input article has headings, keep them in the output." if request.preserve_headings else ""}
 
-                        if re.search(r'\d+', sentence):
-                            score += 15
+Use bullet points or numbered lists if they enhance clarity in the condensed version.
+"""
 
-                        scored_sentences.append((idx, sentence, score))
+        user_prompt = f"""Input Article:
+{original_text}
 
-                    scored_sentences.sort(key=lambda x: x[2], reverse=True)
+Condensed Version ({request.percentage}% of Original Length):"""
 
-                    current_condensed_length = len(sentences[0])
-                    if len(sentences) > 1:
-                        current_condensed_length += len(sentences[-1])
-
-                    selected_indices = []
-                    for idx, sentence, _ in scored_sentences:
-                        if current_condensed_length >= paragraph_target:
-                            break
-                        selected_indices.append(idx)
-                        current_condensed_length += len(sentence)
-
-                    selected_indices.sort()
-
-                    for idx in selected_indices:
-                        important_sentences.append(middle_sentences[idx])
-
-                    if len(sentences) > 1:
-                        important_sentences.append(sentences[-1])
-
-                    condensed_paragraph = " ".join(important_sentences)
-                    condensed_paragraphs.append(condensed_paragraph)
-                    current_length += len(condensed_paragraph)
-
-        condensed_text = "\n\n".join(condensed_paragraphs)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for more deterministic output
+            max_tokens=4000,  # Adjust as needed
+        )
+        
+        condensed_text = response.choices[0].message.content.strip()
+        
         condensed_length = len(condensed_text)
         percentage_achieved = (condensed_length / original_length) * 100 if original_length > 0 else 0
-
+        
         return TextCondensationResponse(
             original_length=original_length,
             condensed_length=condensed_length,
