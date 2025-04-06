@@ -8,10 +8,10 @@ import re
 import trafilatura
 from newspaper import Article
 from readability import Document
+from playwright.async_api import async_playwright
 
 app = FastAPI()
 
-# Disable CORS. Do not remove this for full-stack development.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
@@ -48,6 +48,7 @@ async def url_to_text(request: UrlToTextRequest):
     """
     Convert URL content to readable text, removing commercial elements and navigation.
     Uses multiple specialized libraries (Trafilatura, Newspaper3k, Readability) for content extraction.
+    Falls back to Playwright browser automation for JavaScript-rendered content.
     """
     try:
         url = str(request.url)
@@ -103,10 +104,102 @@ async def url_to_text(request: UrlToTextRequest):
             except Exception:
                 pass
         
+        if not text or len(text.strip()) < 100:
+            try:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    page = await browser.new_page()
+                    
+                    await page.set_viewport_size({"width": 1280, "height": 1080})
+                    
+                    await page.goto(url, wait_until="load", timeout=60000)
+                    
+                    await page.wait_for_load_state("domcontentloaded")
+                    
+                    await page.wait_for_timeout(5000)
+                    
+                    page_title = await page.title()
+                    if page_title:
+                        title = page_title
+                    
+                    content_selectors = [
+                        "article", 
+                        "main", 
+                        ".article", 
+                        ".post", 
+                        ".content",
+                        "[role='main']",
+                        ".post-content",
+                        ".article-content",
+                        ".entry-content",
+                        ".blog-post",
+                        ".blog-content"
+                    ]
+                    
+                    content_text = ""
+                    
+                    for selector in content_selectors:
+                        try:
+                            content = await page.query_selector(selector)
+                            if content:
+                                content_text = await content.inner_text()
+                                if content_text and len(content_text.strip()) > 100:
+                                    break
+                        except Exception:
+                            continue
+                    
+                    if not content_text or len(content_text.strip()) < 100:
+                        paragraphs = await page.query_selector_all("p")
+                        paragraph_texts = []
+                        
+                        for p in paragraphs:
+                            p_text = await p.inner_text()
+                            if p_text and len(p_text.strip()) > 20:  # Filter out short paragraphs
+                                paragraph_texts.append(p_text.strip())
+                        
+                        content_text = "\n\n".join(paragraph_texts)
+                    
+                    if not content_text or len(content_text.strip()) < 100:
+                        body = await page.query_selector("body")
+                        if body:
+                            content_text = await body.inner_text()
+                    
+                    await browser.close()
+                    
+                    if content_text and len(content_text.strip()) > 100:
+                        text = content_text
+            except Exception as e:
+                print(f"Playwright extraction failed: {str(e)}")
+                pass
+        
         if text:
             text = re.sub(r'\n{3,}', '\n\n', text)
+            
             text = '\n'.join([line for line in text.split('\n') 
                              if len(line.strip()) > 1 and not re.match(r'^[\d\W]+$', line.strip())])
+            
+            common_ui_patterns = [
+                r'Cookie Policy',
+                r'Accept Cookies',
+                r'Privacy Policy',
+                r'Terms of Service',
+                r'Sign up',
+                r'Log in',
+                r'Subscribe',
+                r'Newsletter',
+                r'Share',
+                r'Follow us',
+                r'Comments',
+                r'Related Articles',
+                r'Read more',
+                r'Loading...',
+                r'Search',
+                r'Menu',
+                r'Navigation'
+            ]
+            
+            for pattern in common_ui_patterns:
+                text = re.sub(r'(?i)' + pattern + r'[\s\n]?', '', text)
         else:
             text = "Could not extract readable content from this URL."
         
