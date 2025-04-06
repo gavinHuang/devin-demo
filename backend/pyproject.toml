@@ -9,6 +9,15 @@ readme = "README.md"
 python = "^3.12"
 fastapi = {extras = ["standard"], version = "^0.115.12"}
 psycopg = {extras = ["binary"], version = "^3.2.6"}
+requests = "^2.31.0"
+beautifulsoup4 = "^4.12.3"
+lxml = "^5.3.2"
+pydantic = "^2.6.4"
+trafilatura = "^2.0.0"
+newspaper3k = "^0.2.8"
+readability-lxml = "^0.8.1"
+uvicorn = "^0.34.0"
+openai = "^1.70.0"
 
 
 [build-system]
